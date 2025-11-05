@@ -3,7 +3,7 @@ name: retrain-and-conditional-deploy
 on:
   workflow_dispatch: {}
   schedule:
-    - cron: "0 4 * * 1"
+    - cron: "0 4 * * 1"   # Mondays 04:00 UTC (05:00 Zurich in winter)
 
 env:
   IMAGE_NAME: football-api
@@ -33,6 +33,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
           pip install "dvc>=3.50.0" "dvc-gs>=3.0.1" "gcsfs>=2024.6.1,<2025" "fsspec>=2024.6.0,<2025"
+          # runtime deps used by training/predict/metrics
           pip install pandas numpy scikit-learn
 
       - name: Auth to GCS for DVC (base64)
@@ -59,7 +60,9 @@ jobs:
       # Ensure DVC uses the same key file (local-only change, not committed)
       - name: Point DVC remote to the key (local-only)
         run: |
-          dvc remote modify --local "${{ steps.dvcremote.outputs.remote_name }}" gcsfs_args '{"token":"'"$RUNNER_TEMP/gcp-key.json"'"}'
+          dvc remote modify --local "${{ steps.dvcremote.outputs.remote_name }}" credentialpath "$RUNNER_TEMP/gcp-key.json"
+          echo "----- .dvc/config.local -----"
+          cat .dvc/config.local || true
 
       - name: Validate GCS credentials file
         run: |
@@ -170,7 +173,7 @@ jobs:
             "mae_away": float(os.environ.get("MAE_AWAY"))
           }
           with open("metrics/baseline.json", "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2)
+              json.dump(data, f, indent=2)
           PY
         env:
           MAE_HOME: ${{ steps.metrics.outputs.mae_home }}
@@ -210,6 +213,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # Ensure models exist in workspace before building the image
       - name: Set up Python for DVC pull
         uses: actions/setup-python@v5
         with:
@@ -240,9 +244,12 @@ jobs:
           echo "Using DVC remote: $name"
           echo "remote_name=$name" >> "$GITHUB_OUTPUT"
 
+      # Ensure DVC uses the same key file (local-only)
       - name: Point DVC remote to the key (local-only)
         run: |
-          dvc remote modify --local "${{ steps.dvcremote_docker.outputs.remote_name }}" gcsfs_args '{"token":"'"$RUNNER_TEMP/gcp-key.json"'"}'
+          dvc remote modify --local "${{ steps.dvcremote_docker.outputs.remote_name }}" credentialpath "$RUNNER_TEMP/gcp-key.json"
+          echo "----- .dvc/config.local -----"
+          cat .dvc/config.local || true
 
       - name: Validate GCS credentials file
         run: |
