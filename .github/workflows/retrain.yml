@@ -36,11 +36,11 @@ jobs:
           # runtime deps used by training/predict/metrics
           pip install pandas numpy scikit-learn
 
-      - name: Auth to GCS for DVC
+      - name: Auth to GCS for DVC (base64)
         run: |
-          # write the raw JSON to a file (no extra quotes/newlines)
-          printf '%s' "${{ secrets.GCP_SA_KEY }}" > $RUNNER_TEMP/gcp-key.json
-          echo "GOOGLE_APPLICATION_CREDENTIALS=$RUNNER_TEMP/gcp-key.json" >> $GITHUB_ENV
+          echo "${{ secrets.GCP_SA_KEY_B64 }}" | base64 -d > "$RUNNER_TEMP/gcp-key.json"
+          echo "GOOGLE_APPLICATION_CREDENTIALS=$RUNNER_TEMP/gcp-key.json" >> "$GITHUB_ENV"
+
 
       - name: Validate GCS credentials file
         run: |
@@ -202,11 +202,11 @@ jobs:
           python -m pip install --upgrade pip
           pip install dvc dvc-gs
 
-      - name: Auth to GCS for DVC
+      - name: Auth to GCS for DVC (base64)
         run: |
-          # write the raw JSON to a file (no extra quotes/newlines)
-          printf '%s' "${{ secrets.GCP_SA_KEY }}" > $RUNNER_TEMP/gcp-key.json
-          echo "GOOGLE_APPLICATION_CREDENTIALS=$RUNNER_TEMP/gcp-key.json" >> $GITHUB_ENV
+          echo "${{ secrets.GCP_SA_KEY_B64 }}" | base64 -d > "$RUNNER_TEMP/gcp-key.json"
+          echo "GOOGLE_APPLICATION_CREDENTIALS=$RUNNER_TEMP/gcp-key.json" >> "$GITHUB_ENV"
+
 
       - name: Validate GCS credentials file
         run: |
