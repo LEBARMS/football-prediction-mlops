@@ -1,0 +1,21 @@
+# python junk
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.venv/
+.env
+
+# git & dvc
+.git/
+.dvc/
+dvc.lock
+dvc.yaml
+
+# data & notebooks
+data/
+notebooks/
+reports/
+
+# everything else you don't need
+*.ipynb_checkpoints/
