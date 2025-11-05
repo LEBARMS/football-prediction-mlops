@@ -86,6 +86,10 @@ jobs:
           dvc pull
           dvc status -c || true
 
+      - name: Ensure model output folder exists
+        run: mkdir -p app/model
+
+
       - name: Run full pipeline (fetch stage is frozen in dvc.yaml)
         env:
           MLFLOW_TRACKING_URI: "file:./mlruns"
