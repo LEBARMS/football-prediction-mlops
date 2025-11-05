@@ -41,6 +41,11 @@ jobs:
           echo "${{ secrets.GCP_SA_KEY_B64 }}" | base64 -d > "$RUNNER_TEMP/gcp-key.json"
           echo "GOOGLE_APPLICATION_CREDENTIALS=$RUNNER_TEMP/gcp-key.json" >> "$GITHUB_ENV"
 
+      # Ensure DVC uses the same key file (local-only change, not committed)
+      - name: Point DVC remote to the key (local-only)
+        run: |
+          dvc remote list
+          dvc remote modify --local gs gcsfs_args '{"token":"'"$RUNNER_TEMP/gcp-key.json"'"}'
 
       - name: Validate GCS credentials file
         run: |
@@ -50,7 +55,6 @@ jobs:
           p = os.environ["GOOGLE_APPLICATION_CREDENTIALS"]
           with open(p, "r", encoding="utf-8") as f:
               data = json.load(f)
-          # print just the email to avoid leaking the full key
           print("Service account:", data.get("client_email"))
           PY
 
@@ -59,15 +63,15 @@ jobs:
           dvc remote list
           echo "----- .dvc/config -----"
           cat .dvc/config || true
+          echo "----- .dvc/config.local -----"
+          cat .dvc/config.local || true
 
       - name: Probe GCS access with gcsfs
         run: |
           python - << 'PY'
           import os, gcsfs
           fs = gcsfs.GCSFileSystem(token=os.environ["GOOGLE_APPLICATION_CREDENTIALS"])
-          # list top of bucket (doesn't need listing perms beyond object admin)
           print("Bucket exists:", fs.exists("football-mlops-yah"))
-          # check the dvcstore prefix existence
           print("dvcstore exists:", fs.exists("football-mlops-yah/dvcstore"))
           PY
 
@@ -75,8 +79,10 @@ jobs:
         run: dvc remote list
 
       - name: DVC pull (restore data & models)
+        env:
+          GOOGLE_APPLICATION_CREDENTIALS: ${{ runner.temp }}/gcp-key.json
         run: |
-          dvc pull
+          dvc pull -v
           dvc status -c || true
 
       - name: Run full pipeline (fetch is frozen in dvc.yaml)
@@ -88,7 +94,9 @@ jobs:
           dvc status -c
 
       - name: Push new artifacts to DVC remote
-        run: dvc push
+        env:
+          GOOGLE_APPLICATION_CREDENTIALS: ${{ runner.temp }}/gcp-key.json
+        run: dvc push -v
 
       - name: Compute fresh metrics from predict outputs
         id: metrics
@@ -207,6 +215,11 @@ jobs:
           echo "${{ secrets.GCP_SA_KEY_B64 }}" | base64 -d > "$RUNNER_TEMP/gcp-key.json"
           echo "GOOGLE_APPLICATION_CREDENTIALS=$RUNNER_TEMP/gcp-key.json" >> "$GITHUB_ENV"
 
+      # Ensure DVC uses the same key file (local-only)
+      - name: Point DVC remote to the key (local-only)
+        run: |
+          dvc remote list
+          dvc remote modify --local gs gcsfs_args '{"token":"'"$RUNNER_TEMP/gcp-key.json"'"}'
 
       - name: Validate GCS credentials file
         run: |
@@ -216,7 +229,6 @@ jobs:
           p = os.environ["GOOGLE_APPLICATION_CREDENTIALS"]
           with open(p, "r", encoding="utf-8") as f:
               data = json.load(f)
-          # print just the email to avoid leaking the full key
           print("Service account:", data.get("client_email"))
           PY
 
@@ -225,19 +237,22 @@ jobs:
           dvc remote list
           echo "----- .dvc/config -----"
           cat .dvc/config || true
+          echo "----- .dvc/config.local -----"
+          cat .dvc/config.local || true
 
       - name: Probe GCS access with gcsfs
         run: |
           python - << 'PY'
           import os, gcsfs
           fs = gcsfs.GCSFileSystem(token=os.environ["GOOGLE_APPLICATION_CREDENTIALS"])
-          # list top of bucket (doesn't need listing perms beyond object admin)
           print("Bucket exists:", fs.exists("football-mlops-yah"))
-          # check the dvcstore prefix existence
           print("dvcstore exists:", fs.exists("football-mlops-yah/dvcstore"))
           PY
+
       - name: DVC pull models for image
-        run: dvc pull
+        env:
+          GOOGLE_APPLICATION_CREDENTIALS: ${{ runner.temp }}/gcp-key.json
+        run: dvc pull -v
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
