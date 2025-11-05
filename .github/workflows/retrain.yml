@@ -16,6 +16,7 @@ jobs:
       promote: ${{ steps.compare.outputs.promote }}
       mae_home_new: ${{ steps.metrics.outputs.mae_home }}
       mae_away_new: ${{ steps.metrics.outputs.mae_away }}
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -27,25 +28,29 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Install pipeline deps
+      - name: Install pipeline deps (DVC + GCS)
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-          pip install "dvc[all]"
-          # runtime deps used by predict, metrics calc
+          pip install dvc dvc-gs
+          # runtime deps used by training/predict/metrics
           pip install pandas numpy scikit-learn
+
+      - name: Auth to GCS for DVC
+        run: |
+          echo "${{ secrets.GCP_SA_KEY }}" > $RUNNER_TEMP/gcp-key.json
+          echo "GOOGLE_APPLICATION_CREDENTIALS=$RUNNER_TEMP/gcp-key.json" >> $GITHUB_ENV
 
       - name: Show DVC remotes
         run: dvc remote list
 
-      - name: Pull cache/artifacts (if any)
+      - name: DVC pull (restore data & models)
         run: |
-          dvc pull || true
+          dvc pull
           dvc status -c || true
 
-      - name: Run full pipeline
+      - name: Run full pipeline (fetch is frozen in dvc.yaml)
         env:
-          # You already set MLflow inside your code; local file store is fine
           MLFLOW_TRACKING_URI: "file:./mlruns"
         run: |
           dvc repro -f
@@ -63,7 +68,6 @@ jobs:
           from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
 
           df = pd.read_csv("data/predictions/predicted_matches.csv")
-          # Your predict.py writes columns: home_goals, away_goals, pred_home_goals, pred_away_goals
           mae_home = mean_absolute_error(df["home_goals"], df["pred_home_goals"])
           mae_away = mean_absolute_error(df["away_goals"], df["pred_away_goals"])
           mse_home = mean_squared_error(df["home_goals"], df["pred_home_goals"])
@@ -75,7 +79,6 @@ jobs:
           print("MAE_HOME", mae_home)
           print("MAE_AWAY", mae_away)
 
-          # Expose a few as GitHub outputs
           import os
           with open(os.environ["GITHUB_OUTPUT"], "a") as f:
               f.write(f"mae_home={mae_home}\n")
@@ -86,34 +89,19 @@ jobs:
               f.write(f"r2_away={r2_away}\n")
           PY
 
-      - name: Load baseline metrics (if exist)
-        id: baseline
-        run: |
-          if [ -f metrics/baseline.json ]; then
-            echo "baseline_file=true" >> $GITHUB_OUTPUT
-          else
-            echo "baseline_file=false" >> $GITHUB_OUTPUT
-          fi
-
       - name: Compare with baseline and decide promotion
         id: compare
         run: |
           python - << 'PY'
           import json, os, pathlib
-
-          # read new metrics from previous step env (GitHub outputs)
-          new_mae_home = float(os.environ.get("MAE_HOME", os.environ.get("mae_home","0")))
-          new_mae_away = float(os.environ.get("MAE_AWAY", os.environ.get("mae_away","0")))
-
-          # thresholds: promote if BOTH improved (you can relax this)
+          new_mae_home = float(os.environ.get("MAE_HOME", os.environ.get("mae_home", "0")))
+          new_mae_away = float(os.environ.get("MAE_AWAY", os.environ.get("mae_away", "0")))
           promote = True
           baseline_path = pathlib.Path("metrics/baseline.json")
           if baseline_path.exists():
               with open(baseline_path, "r", encoding="utf-8") as f:
                   base = json.load(f)
               promote = (new_mae_home <= base.get("mae_home", 1e9)) and (new_mae_away <= base.get("mae_away", 1e9))
-
-          # write decision
           with open(os.environ["GITHUB_OUTPUT"], "a") as f:
               f.write(f"promote={'true' if promote else 'false'}\n")
           print("PROMOTE:", promote)
@@ -172,6 +160,25 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      # Ensure models exist in workspace before building the image
+      - name: Set up Python for DVC pull
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install DVC + GCS (for docker job)
+        run: |
+          python -m pip install --upgrade pip
+          pip install dvc dvc-gs
+
+      - name: Auth to GCS for DVC (docker job)
+        run: |
+          echo "${{ secrets.GCP_SA_KEY }}" > $RUNNER_TEMP/gcp-key.json
+          echo "GOOGLE_APPLICATION_CREDENTIALS=$RUNNER_TEMP/gcp-key.json" >> $GITHUB_ENV
+
+      - name: DVC pull models for image
+        run: dvc pull
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
