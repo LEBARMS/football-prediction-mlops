@@ -3,53 +3,39 @@ __pycache__/
 *.pyc
 *.pyo
 *.pyd
-*.pkl
-*.pickle
 
-# Environment and IDE files
-.env
+# Environments & IDE
 .venv/
 env/
 venv/
-.ipynb_checkpoints/
+.env
 .vscode/
 .idea/
+.ipynb_checkpoints/
 
-# Data and models
-data/raw/
-data/processed/
+# Project data & artifacts (managed by DVC or generated)
+data/
 models/
 artifacts/
-*.csv
-*.xlsx
-*.json
-
-# Logs and outputs
 logs/
 runs/
 mlruns/
 notebooks/
-*.log
+reports/
 
-# DVC and MLflow
-.dvc/
-.dvc/cache/
-.dvc/tmp/
-#*.lock
-mlartifacts/
+# DVC (ignore everything except the config and dvcignore)
+.dvc/**
+!.dvc/config
+!.dvcignore
 
-# Docker and build
-*.dockerfile
-Dockerfile
+# Build / packaging
 __MACOSX/
 *.egg-info/
 
-# OS-specific files
+# OS-specific
 .DS_Store
 Thumbs.db
 
-# Reports and HTML exports
-reports/
-*.html
-*.pdf
-/models
+app/model/
+dvc_storage/
+
