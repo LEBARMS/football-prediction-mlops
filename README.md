@@ -65,6 +65,21 @@ source .venv/bin/activate    # (Linux / Mac)
  Ouvrir http://localhost:5000 
 
 ```
+### 6 Lancer l'API REST
+```
+uvicorn app.main:app --reload
+Ouvrir :  http://127.0.0.1:8000
+Cliquer sur post/predict
+Cliquer sur try it out
+Changer le nom du Home Team et du Away Team
+Execute
+Résultat quelques cases vers le bas
+```
+### 7 Docker build & run
+```
+docker build -t football-api:0.1.0 .
+docker run --rm -p 8000:8000 football-api:0.1.0
+```
 
 ## Étapes actuelles implémentées
 ```
