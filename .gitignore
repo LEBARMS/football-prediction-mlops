@@ -36,6 +36,5 @@ __MACOSX/
 .DS_Store
 Thumbs.db
 
-app/model/
 dvc_storage/
 
