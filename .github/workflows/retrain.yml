@@ -34,41 +34,30 @@ jobs:
           pip install -r requirements.txt
           pip install dvc dvc-gs
           # runtime deps used by training/predict/metrics
-          pip install pandas numpy scikit-learn gcsfs
+          pip install pandas numpy scikit-learn
 
-      # ---- GCS auth + DVC remote configuration ----
       - name: Auth to GCS for DVC (base64)
         run: |
           echo "${{ secrets.GCP_SA_KEY_B64 }}" | base64 -d > "$RUNNER_TEMP/gcp-key.json"
           echo "GOOGLE_APPLICATION_CREDENTIALS=$RUNNER_TEMP/gcp-key.json" >> "$GITHUB_ENV"
 
+
       - name: Validate GCS credentials file
         run: |
           test -s "$RUNNER_TEMP/gcp-key.json"
           python - << 'PY'
-          import os, json
+          import os, json, sys
           p = os.environ["GOOGLE_APPLICATION_CREDENTIALS"]
           with open(p, "r", encoding="utf-8") as f:
               data = json.load(f)
+          # print just the email to avoid leaking the full key
           print("Service account:", data.get("client_email"))
           PY
 
-      - name: Ensure DVC remote points to GCS and uses this key
+      - name: Show DVC remote and config
         run: |
-          dvc remote list || true
-          echo "----- .dvc/config BEFORE -----"
-          cat .dvc/config || true
-
-          # Force-correct the remote URL if needed (idempotent)
-          dvc remote modify gcs_remote url gs://football-mlops-yah/dvcstore || true
-
-          # Tell dvc-gs to use the key file explicitly
-          dvc remote modify gcs_remote credentialpath "$RUNNER_TEMP/gcp-key.json"
-
-          # Optional: set project id (helps on some setups)
-          dvc remote modify gcs_remote projectname football-mlops
-
-          echo "----- .dvc/config AFTER -----"
+          dvc remote list
+          echo "----- .dvc/config -----"
           cat .dvc/config || true
 
       - name: Probe GCS access with gcsfs
@@ -76,21 +65,21 @@ jobs:
           python - << 'PY'
           import os, gcsfs
           fs = gcsfs.GCSFileSystem(token=os.environ["GOOGLE_APPLICATION_CREDENTIALS"])
+          # list top of bucket (doesn't need listing perms beyond object admin)
           print("Bucket exists:", fs.exists("football-mlops-yah"))
+          # check the dvcstore prefix existence
           print("dvcstore exists:", fs.exists("football-mlops-yah/dvcstore"))
           PY
-      # ---- end GCS auth + DVC remote configuration ----
+
+      - name: Show DVC remotes
+        run: dvc remote list
 
       - name: DVC pull (restore data & models)
         run: |
           dvc pull
           dvc status -c || true
 
-      - name: Ensure model output folder exists
-        run: mkdir -p app/model
-
-
-      - name: Run full pipeline (fetch stage is frozen in dvc.yaml)
+      - name: Run full pipeline (fetch is frozen in dvc.yaml)
         env:
           MLFLOW_TRACKING_URI: "file:./mlruns"
         run: |
@@ -202,7 +191,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # Pull models again in this clean job so they are included in the image
+      # Ensure models exist in workspace before building the image
       - name: Set up Python for DVC pull
         uses: actions/setup-python@v5
         with:
@@ -211,41 +200,42 @@ jobs:
       - name: Install DVC + GCS (for docker job)
         run: |
           python -m pip install --upgrade pip
-          pip install dvc dvc-gs gcsfs
+          pip install dvc dvc-gs
 
-      # ---- repeat GCS auth + DVC config ----
       - name: Auth to GCS for DVC (base64)
         run: |
           echo "${{ secrets.GCP_SA_KEY_B64 }}" | base64 -d > "$RUNNER_TEMP/gcp-key.json"
           echo "GOOGLE_APPLICATION_CREDENTIALS=$RUNNER_TEMP/gcp-key.json" >> "$GITHUB_ENV"
 
+
       - name: Validate GCS credentials file
         run: |
           test -s "$RUNNER_TEMP/gcp-key.json"
           python - << 'PY'
-          import os, json
+          import os, json, sys
           p = os.environ["GOOGLE_APPLICATION_CREDENTIALS"]
           with open(p, "r", encoding="utf-8") as f:
               data = json.load(f)
+          # print just the email to avoid leaking the full key
           print("Service account:", data.get("client_email"))
           PY
 
-      - name: Ensure DVC remote points to GCS and uses this key
+      - name: Show DVC remote and config
         run: |
-          dvc remote modify gcs_remote url gs://football-mlops-yah/dvcstore || true
-          dvc remote modify gcs_remote credentialpath "$RUNNER_TEMP/gcp-key.json"
-          dvc remote modify gcs_remote projectname football-mlops
+          dvc remote list
+          echo "----- .dvc/config -----"
+          cat .dvc/config || true
 
       - name: Probe GCS access with gcsfs
         run: |
           python - << 'PY'
           import os, gcsfs
           fs = gcsfs.GCSFileSystem(token=os.environ["GOOGLE_APPLICATION_CREDENTIALS"])
+          # list top of bucket (doesn't need listing perms beyond object admin)
           print("Bucket exists:", fs.exists("football-mlops-yah"))
+          # check the dvcstore prefix existence
           print("dvcstore exists:", fs.exists("football-mlops-yah/dvcstore"))
           PY
-      # ---- end repeat ----
-
       - name: DVC pull models for image
         run: dvc pull
 
