@@ -6,9 +6,10 @@ on:
       docker_repo:
         description: "Container repo (e.g., docker.io/<user>/football-api)"
         required: true
-        default: "docker.io/${{ secrets.DOCKERHUB_USERNAME }}/football-api"
+        # 👇 Can't use secrets.* here, so use a static default.
+        default: "docker.io/your-dockerhub-username/football-api"
       image_digest:
-        description: "Image digest WITHOUT the 'sha256:' prefix? Either is fine. Example: c33be0...58ddcb"
+        description: "Image digest WITHOUT the 'sha256:' prefix (or include it). Example: c33be0...58ddcb"
         required: true
       region:
         description: "Cloud Run region"
@@ -63,7 +64,6 @@ jobs:
       - name: Auth to GCP
         uses: google-github-actions/auth@v2
         with:
-          # JSON key for the *deployer* service account
           credentials_json: ${{ secrets.GCP_SA_KEY }}
 
       - name: Setup gcloud
@@ -108,22 +108,18 @@ jobs:
             "--memory=${{ inputs.memory }}"
             "--project=${{ secrets.GCP_PROJECT_ID }}"
           )
-
           # Allow unauthenticated if requested
           if [[ "${{ inputs.allow_unauthenticated }}" == "true" ]]; then
             ARGS+=("--allow-unauthenticated")
           fi
-
           # Runtime Service Account (optional)
           if [[ -n "${{ inputs.runtime_service_account }}" ]]; then
             ARGS+=("--service-account=${{ inputs.runtime_service_account }}")
           fi
-
           # Environment variables (optional)
           if [[ -n "${{ inputs.env_vars }}" ]]; then
             ARGS+=("--set-env-vars=${{ inputs.env_vars }}")
           fi
-
           echo "gcloud run deploy '${{ inputs.service }}' ${ARGS[*]}"
           gcloud run deploy "${{ inputs.service }}" "${ARGS[@]}"
 
