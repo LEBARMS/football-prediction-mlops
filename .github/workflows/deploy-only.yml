@@ -51,10 +51,6 @@ permissions:
   contents: read
   id-token: write
 
-concurrency:
-  group: deploy-only-${{ github.ref }}
-  cancel-in-progress: false
-
 jobs:
   deploy:
     runs-on: ubuntu-latest
