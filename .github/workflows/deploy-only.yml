@@ -26,26 +26,14 @@ on:
         description: "Container port"
         required: true
         default: "8000"
-      max_instances:
-        description: "Max instances"
-        required: true
-        default: "2"
-      cpu:
-        description: "vCPU"
-        required: true
-        default: "1"
-      memory:
-        description: "Memory"
-        required: true
-        default: "512Mi"
       env_vars:
         description: "Comma-separated KEY=VALUE pairs for --set-env-vars (leave empty for none)"
         required: false
         default: "ENV=prod"
-      runtime_service_account:
-        description: "Optional runtime SA email"
+      deploy_flags:
+        description: "Extra gcloud flags (e.g. --max-instances=2 --cpu=1 --memory=512Mi)"
         required: false
-        default: ""
+        default: "--max-instances=2 --cpu=1 --memory=512Mi"
 
 permissions:
   contents: read
@@ -102,19 +90,21 @@ jobs:
             "--region=${{ inputs.region }}"
             "--platform=managed"
             "--port=${{ inputs.port }}"
-            "--max-instances=${{ inputs.max_instances }}"
-            "--cpu=${{ inputs.cpu }}"
-            "--memory=${{ inputs.memory }}"
             "--project=${{ secrets.GCP_PROJECT_ID }}"
           )
+          # Allow unauthenticated if requested
           if [[ "${{ inputs.allow_unauthenticated }}" == "true" ]]; then
             ARGS+=("--allow-unauthenticated")
           fi
-          if [[ -n "${{ inputs.runtime_service_account }}" ]]; then
-            ARGS+=("--service-account=${{ inputs.runtime_service_account }}")
-          fi
+          # Env vars
           if [[ -n "${{ inputs.env_vars }}" ]]; then
             ARGS+=("--set-env-vars=${{ inputs.env_vars }}")
+          fi
+          # Extra flags (size, etc.)
+          if [[ -n "${{ inputs.deploy_flags }}" ]]; then
+            # shellsplit: expand flags into array
+            read -r -a EXTRA <<< "${{ inputs.deploy_flags }}"
+            ARGS+=("${EXTRA[@]}")
           fi
           echo "gcloud run deploy '${{ inputs.service }}' ${ARGS[*]}"
           gcloud run deploy "${{ inputs.service }}" "${ARGS[@]}"
