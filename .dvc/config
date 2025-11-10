@@ -1,0 +1,7 @@
+[core]
+    remote = gcs_remote
+['remote "storage"']
+    url = ../dvc_storage
+['remote "gcs_remote"']
+    url = gs://football-mlops-yah/dvcstore
+    credentialpath = D:\Users\antho\Sem 2\TSM_MachLeData\projet\football-prediction-mlops\football-mlops-8582e2bc64d3.json
