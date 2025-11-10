@@ -1,15 +1,10 @@
-name: deploy-only-to-cloud-run
-
 on:
   workflow_dispatch:
     inputs:
-      docker_repo:
-        description: "Container repo (e.g., docker.io/<user>/football-api)"
+      image_tag_or_digest:
+        description: "Tag (e.g. latest or a commit SHA) OR full digest (sha256:...)"
         required: true
-        default: "docker.io/your-dockerhub-username/football-api"
-      image_digest:
-        description: "Image digest (with or without 'sha256:')"
-        required: true
+        default: "latest"
       region:
         description: "Cloud Run region"
         required: true
@@ -19,7 +14,7 @@ on:
         required: true
         default: "football-api"
       allow_unauthenticated:
-        description: "Allow unauthenticated invocations"
+        description: "Allow unauthenticated"
         required: true
         default: "true"
       port:
@@ -27,87 +22,76 @@ on:
         required: true
         default: "8000"
       env_vars:
-        description: "Comma-separated KEY=VALUE pairs for --set-env-vars (leave empty for none)"
+        description: "KEY=VALUE pairs (comma-separated)"
         required: false
         default: "ENV=prod"
       deploy_flags:
-        description: "Extra gcloud flags (e.g. --max-instances=2 --cpu=1 --memory=512Mi)"
+        description: "Extra flags (e.g. --max-instances=2 --cpu=1 --memory=512Mi --service-account=...)"
         required: false
         default: "--max-instances=2 --cpu=1 --memory=512Mi"
-
-permissions:
-  contents: read
-  id-token: write
+      project_id:
+        description: "Override GCP project (optional)"
+        required: false
+        default: ""
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
-      - name: Print selected ref and inputs
-        shell: bash
-        run: |
-          set -euo pipefail
-          echo "REF=${GITHUB_REF}"
-          echo "SHA=${GITHUB_SHA}"
-          echo "docker_repo='${{ inputs.docker_repo }}'"
-          echo "image_digest='${{ inputs.image_digest }}'"
-
       - name: Auth to GCP
         uses: google-github-actions/auth@v2
         with:
           credentials_json: ${{ secrets.GCP_SA_KEY }}
 
-      # Resolve project from secret (if set) or from the SA JSON
       - name: Resolve and set active project
         id: project
         shell: bash
         env:
           SA_JSON: ${{ secrets.GCP_SA_KEY }}
-          GCP_PROJECT_ID_SECRET: ${{ secrets.GCP_PROJECT_ID }}
+          PROJECT_ID_SECRET: ${{ secrets.GCP_PROJECT_ID }}
         run: |
           set -euo pipefail
-          PID="${GCP_PROJECT_ID_SECRET:-}"
-          if [ -z "$PID" ]; then
-            PID="$(jq -r '.project_id' <<<"$SA_JSON")"
-          fi
+          PID="${{ inputs.project_id }}"
+          if [ -z "$PID" ]; then PID="${PROJECT_ID_SECRET:-}"; fi
+          if [ -z "$PID" ]; then PID="$(jq -r '.project_id' <<<"$SA_JSON")"; fi
           echo "Using project: $PID"
-          echo "project_id=$PID" >> "$GITHUB_OUTPUT"
           echo "GCP_PROJECT_ID=$PID" >> "$GITHUB_ENV"
           gcloud config set project "$PID" >/dev/null
 
       - name: Setup gcloud
         uses: google-github-actions/setup-gcloud@v2
 
-      - name: Build IMAGE_REF from digest
+      - name: Build IMAGE_REF from tag/digest
         id: image
         shell: bash
+        env:
+          DH_USER: ${{ secrets.DOCKERHUB_USERNAME }}
         run: |
           set -euo pipefail
-          DIG="${{ inputs.image_digest }}"
-          case "$DIG" in sha256:*) ;; *) DIG="sha256:${DIG}";; esac
-          IMAGE_REF="${{ inputs.docker_repo }}@${DIG}"
+          REPO="docker.io/${DH_USER}/football-api"
+          IN="${{ inputs.image_tag_or_digest }}"
+          case "$IN" in
+            sha256:*) IMAGE_REF="${REPO}@${IN}" ;;
+            *)        IMAGE_REF="${REPO}:${IN}" ;;
+          esac
           echo "IMAGE_REF=$IMAGE_REF" >> "$GITHUB_OUTPUT"
           echo "Using image: $IMAGE_REF"
 
-      - name: Check Cloud Run API and list services
+      - name: Check Cloud Run API (best-effort) and list services
         shell: bash
         run: |
-            set -euo pipefail
-            if gcloud services list --enabled --project="$GCP_PROJECT_ID" \
-                --filter='NAME:run.googleapis.com' --format='value(NAME)' \
-                | grep -q '^run.googleapis.com$'; then
-            echo "Cloud Run API already enabled."
-            else
-            echo "::error::Cloud Run API is NOT enabled for project $GCP_PROJECT_ID."
-            echo "::error::Enable it once with:"
-            echo "  gcloud services enable run.googleapis.com --project=$GCP_PROJECT_ID"
-            echo "  (requires roles/serviceusage.serviceUsageAdmin or Project Owner/Editor)"
-            exit 1
-            fi
-            gcloud run services list --region='${{ inputs.region }}' --project="$GCP_PROJECT_ID" || true
+          set -euo pipefail
+          if gcloud services list --enabled --project="$GCP_PROJECT_ID" \
+               --filter='NAME:run.googleapis.com' --format='value(NAME)' 2>/dev/null \
+               | grep -q '^run.googleapis.com$'; then
+            echo "Cloud Run API is enabled."
+          else
+            echo "::warning::Could not verify Cloud Run API (missing viewer perms). If deploy fails, enable it once with:"
+            echo "gcloud services enable run.googleapis.com --project=$GCP_PROJECT_ID"
+          fi
+          gcloud run services list --region='${{ inputs.region }}' --project="$GCP_PROJECT_ID" || true
 
-
-      - name: Deploy to Cloud Run (by digest)
+      - name: Deploy to Cloud Run
         shell: bash
         env:
           IMAGE_REF: ${{ steps.image.outputs.IMAGE_REF }}
@@ -119,17 +103,9 @@ jobs:
             --platform=managed \
             --port='${{ inputs.port }}' \
             --project='$GCP_PROJECT_ID'"
-
-          if [ "${{ inputs.allow_unauthenticated }}" = "true" ]; then
-            CMD="$CMD --allow-unauthenticated"
-          fi
-          if [ -n "${{ inputs.env_vars }}" ]; then
-            CMD="$CMD --set-env-vars='${{ inputs.env_vars }}'"
-          fi
-          if [ -n "${{ inputs.deploy_flags }}" ]; then
-            CMD="$CMD ${{ inputs.deploy_flags }}"
-          fi
-
+          if [ "${{ inputs.allow_unauthenticated }}" = "true" ]; then CMD="$CMD --allow-unauthenticated"; fi
+          if [ -n "${{ inputs.env_vars }}" ]; then CMD="$CMD --set-env-vars='${{ inputs.env_vars }}'"; fi
+          if [ -n "${{ inputs.deploy_flags }}" ]; then CMD="$CMD ${{ inputs.deploy_flags }}"; fi
           echo "$CMD"
           eval "$CMD"
 
