@@ -45,31 +45,50 @@ class PredictOneResponse(BaseModel):
 class PredictBatchResponse(BaseModel):
     predictions: List[PredictOneResponse]
 
-# ---------- Model loading ----------
+# ---------- Model loading (startup-safe) ----------
 home_model = xgb.XGBRegressor()
 away_model = xgb.XGBRegressor()
+_models_loaded = False  # we keep track to avoid crashing on startup
 
-def _ensure_models():
-    for p in (HOME_MODEL_PATH, AWAY_MODEL_PATH):
-        if not (os.path.exists(p) and os.path.getsize(p) > 0):
-            raise FileNotFoundError(f"Missing model file: {p}")
+def _models_exist() -> bool:
+    return all(os.path.exists(p) and os.path.getsize(p) > 0 for p in (HOME_MODEL_PATH, AWAY_MODEL_PATH))
+
+def _try_load_models() -> bool:
+    """Attempt to load models once; return True if successful, False otherwise."""
+    global _models_loaded
+    if _models_loaded:
+        return True
+    if not _models_exist():
+        return False
+    try:
+        home_model.load_model(HOME_MODEL_PATH)
+        away_model.load_model(AWAY_MODEL_PATH)
+        _models_loaded = True
+        return True
+    except Exception:
+        return False
 
 @app.on_event("startup")
-def _load_models():
-    _ensure_models()
-    home_model.load_model(HOME_MODEL_PATH)
-    away_model.load_model(AWAY_MODEL_PATH)
+def _startup():
+    # Best-effort load; do not crash the server if models are absent
+    _try_load_models()
 
 @app.get("/health", include_in_schema=False)
 def health():
-    try:
-        _ensure_models()
-        return {"status": "ok"}
-    except Exception as e:
-        return {"status": "degraded", "detail": str(e)}
+    return {
+        "status": "ok" if _models_loaded else "degraded",
+        "models_loaded": _models_loaded,
+        "model_dir": MODEL_DIR,
+        "home_model": os.path.basename(HOME_MODEL_PATH),
+        "away_model": os.path.basename(AWAY_MODEL_PATH),
+    }
 
 # ---------- Core prediction ----------
 def _predict_core(df: pd.DataFrame) -> List[PredictOneResponse]:
+    # Ensure models are available (lazy load if needed)
+    if not _try_load_models():
+        raise HTTPException(status_code=503, detail=f"Models not available in {MODEL_DIR}")
+
     missing = [c for c in REQUIRED_FEATURES if c not in df.columns]
     if missing:
         raise HTTPException(status_code=400, detail=f"Missing features: {missing}")

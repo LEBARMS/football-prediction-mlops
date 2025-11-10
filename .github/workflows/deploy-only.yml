@@ -17,10 +17,6 @@ on:
         description: "Allow unauthenticated"
         required: true
         default: "true"
-      port:
-        description: "Container port"
-        required: true
-        default: "8000"
       env_vars:
         description: "KEY=VALUE pairs (comma-separated)"
         required: false
@@ -28,7 +24,7 @@ on:
       deploy_flags:
         description: "Extra flags (e.g. --max-instances=2 --cpu=1 --memory=512Mi --service-account=...)"
         required: false
-        default: "--max-instances=2 --cpu=1 --memory=512Mi"
+        default: "--max-instances=2 --cpu=1 --memory=512Mi --timeout=300"
       project_id:
         description: "Override GCP project (optional)"
         required: false
@@ -41,7 +37,11 @@ jobs:
       - name: Auth to GCP
         uses: google-github-actions/auth@v2
         with:
+          # IMPORTANT: GCP_SA_KEY must be RAW JSON (not base64)
           credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Install jq (used to parse SA JSON)
+        run: sudo apt-get update && sudo apt-get install -y jq
 
       - name: Resolve and set active project
         id: project
@@ -101,7 +101,6 @@ jobs:
             --image='${IMAGE_REF}' \
             --region='${{ inputs.region }}' \
             --platform=managed \
-            --port='${{ inputs.port }}' \
             --project='$GCP_PROJECT_ID'"
           if [ "${{ inputs.allow_unauthenticated }}" = "true" ]; then CMD="$CMD --allow-unauthenticated"; fi
           if [ -n "${{ inputs.env_vars }}" ]; then CMD="$CMD --set-env-vars='${{ inputs.env_vars }}'"; fi
