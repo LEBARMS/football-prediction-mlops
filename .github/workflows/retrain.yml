@@ -8,7 +8,7 @@ on:
 env:
   IMAGE_NAME: football-api
   IMAGE_TAG: latest
-  TARGET_REF: Anthony
+  TARGET_REF: main   # ⬅️ switched to main
 
 jobs:
   retrain:
@@ -19,7 +19,7 @@ jobs:
       mae_away_new: ${{ steps.metrics.outputs.mae_away }}
 
     steps:
-      - name: Checkout code (Anthony branch for scheduled runs)
+      - name: Checkout code (main)
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
@@ -60,27 +60,8 @@ jobs:
       - name: Point DVC remote to the key (local-only)
         run: |
           dvc remote modify --local "${{ steps.dvcremote.outputs.remote_name }}" credentialpath "$RUNNER_TEMP/gcp-key.json"
-          echo "----- .dvc/config.local -----"
-          cat .dvc/config.local || true
-
-      - name: Validate GCS credentials file
-        run: |
-          test -s "$RUNNER_TEMP/gcp-key.json"
-          python - << 'PY'
-          import os, json
-          p = os.environ["GOOGLE_APPLICATION_CREDENTIALS"]
-          with open(p, "r", encoding="utf-8") as f:
-              data = json.load(f)
-          print("Service account:", data.get("client_email"))
-          PY
-
-      - name: Show DVC remote and config
-        run: |
-          dvc remote list
-          echo "----- .dvc/config -----"
-          cat .dvc/config || true
-          echo "----- .dvc/config.local -----"
-          cat .dvc/config.local || true
+          echo "----- .dvc/config -----"; cat .dvc/config || true
+          echo "----- .dvc/config.local -----"; cat .dvc/config.local || true
 
       - name: Probe GCS access with gcsfs
         run: |
@@ -95,14 +76,20 @@ jobs:
         env:
           GOOGLE_APPLICATION_CREDENTIALS: ${{ runner.temp }}/gcp-key.json
         run: |
-          dvc pull -v
+          dvc pull -v || echo "No remote cache yet — continuing"
           dvc status -c || true
+
+      # ---------- Option A: DVC-native refresh of fetch_data on MAIN ----------
       - name: Unfreeze fetch_data (if previously frozen)
         run: dvc unfreeze fetch_data || true
 
-      - name: Reproduce only fetch_data
+      - name: Reproduce only fetch_data (force) with new outs
+        shell: bash
         run: |
-          dvc repro -s fetch_data -v
+          set -e
+          echo "==== dvc.yaml (fetch_data) ===="
+          awk '/^fetch_data:/,/^[^ ]/{print}' dvc.yaml || true
+          dvc repro -f -s fetch_data -v
           test -s data/raw/schedule_multi_leagues.csv
           test -s data/raw/team_stats_multi_leagues.csv
 
@@ -118,7 +105,11 @@ jobs:
           GOOGLE_APPLICATION_CREDENTIALS: ${{ runner.temp }}/gcp-key.json
         run: dvc push -v
 
-      - name: Run full pipeline (fetch is frozen in dvc.yaml)
+      - name: Freeze fetch_data again (optional)
+        run: dvc freeze fetch_data || true
+      # -----------------------------------------------------------------------
+
+      - name: Run full pipeline (downstream stages)
         env:
           MLFLOW_TRACKING_URI: "file:./mlruns"
         run: |
@@ -137,7 +128,6 @@ jobs:
           python - << 'PY'
           import pandas as pd
           from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
-
           df = pd.read_csv("data/predictions/predicted_matches.csv")
           mae_home = mean_absolute_error(df["home_goals"], df["pred_home_goals"])
           mae_away = mean_absolute_error(df["away_goals"], df["pred_away_goals"])
@@ -145,11 +135,7 @@ jobs:
           mse_away = mean_squared_error(df["away_goals"], df["pred_away_goals"])
           r2_home = r2_score(df["home_goals"], df["pred_home_goals"])
           r2_away = r2_score(df["away_goals"], df["pred_away_goals"])
-
-          print("Fresh metrics:")
-          print("MAE_HOME", mae_home)
-          print("MAE_AWAY", mae_away)
-
+          print("Fresh metrics:", mae_home, mae_away)
           import os
           with open(os.environ["GITHUB_OUTPUT"], "a") as f:
               f.write(f"mae_home={mae_home}\n")
@@ -231,6 +217,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          ref: main   # ⬅️ ensure docker job also uses main
 
       - name: Set up Python for DVC pull
         uses: actions/setup-python@v5
@@ -259,49 +247,17 @@ jobs:
             echo "No DVC remote found." >&2
             exit 1
           fi
-          echo "Using DVC remote: $name"
           echo "remote_name=$name" >> "$GITHUB_OUTPUT"
 
       - name: Point DVC remote to the key (local-only)
         run: |
           dvc remote modify --local "${{ steps.dvcremote_docker.outputs.remote_name }}" credentialpath "$RUNNER_TEMP/gcp-key.json"
-          echo "----- .dvc/config.local -----"
-          cat .dvc/config.local || true
-
-      - name: Validate GCS credentials file
-        run: |
-          test -s "$RUNNER_TEMP/gcp-key.json"
-          python - << 'PY'
-          import os, json
-          p = os.environ["GOOGLE_APPLICATION_CREDENTIALS"]
-          with open(p, "r", encoding="utf-8") as f:
-            data = json.load(f)
-          print("Service account:", data.get("client_email"))
-          PY
-
-      - name: Show DVC remote and config
-        run: |
-          dvc remote list
-          echo "----- .dvc/config -----"
-          cat .dvc/config || true
-          echo "----- .dvc/config.local -----"
-          cat .dvc/config.local || true
-
-      - name: Probe GCS access with gcsfs
-        run: |
-          python - << 'PY'
-          import os, gcsfs
-          fs = gcsfs.GCSFileSystem(token=os.environ["GOOGLE_APPLICATION_CREDENTIALS"])
-          print("Bucket exists:", fs.exists("football-mlops-yah"))
-          print("dvcstore exists:", fs.exists("football-mlops-yah/dvcstore"))
-          PY
 
       - name: DVC pull models for image
         env:
           GOOGLE_APPLICATION_CREDENTIALS: ${{ runner.temp }}/gcp-key.json
         run: |
-          dvc pull -v || echo "No remote cache yet (first run / new hashes) — continuing to repro"
-          dvc status -c || true
+          dvc pull -v || echo "No remote cache yet (first run) — continuing"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -320,46 +276,3 @@ jobs:
           tags: |
             ${{ secrets.DOCKERHUB_USERNAME }}/${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
             ${{ secrets.DOCKERHUB_USERNAME }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
-
-  deploy:
-    needs: docker
-    if: needs.retrain.outputs.promote == 'true'
-    runs-on: ubuntu-latest
-    environment: production
-    steps:
-      - name: Auth to GCP
-        uses: google-github-actions/auth@v2
-        with:
-          credentials_json: ${{ secrets.GCP_SA_KEY }}
-
-      - name: Setup gcloud
-        uses: google-github-actions/setup-gcloud@v2
-        with:
-          project_id: ${{ secrets.GCP_PROJECT_ID }}
-
-      - name: Verify account, project, and region access
-        run: |
-          gcloud auth list
-          gcloud config list
-          gcloud projects describe ${{ secrets.GCP_PROJECT_ID }} --format='value(projectNumber)'
-          gcloud services enable run.googleapis.com --project=${{ secrets.GCP_PROJECT_ID }}
-          gcloud run services list --region=europe-west6 --project=${{ secrets.GCP_PROJECT_ID }} || true
-
-      - name: Deploy to Cloud Run
-        run: |
-          gcloud run deploy football-api \
-            --image=docker.io/${{ secrets.DOCKERHUB_USERNAME }}/football-api:${{ github.sha }} \
-            --region=europe-west6 --platform=managed \
-            --allow-unauthenticated \
-            --port=8000 \
-            --set-env-vars=ENV=prod \
-            --set-env-vars=ENV=prod,MODEL_DIR=/app/model \
-            --max-instances=2 --cpu=1 --memory=512Mi \
-            --project=${{ secrets.GCP_PROJECT_ID }}
-
-      - name: Show service URL
-        run: |
-          gcloud run services describe football-api \
-            --region=europe-west6 \
-            --format='value(status.url)' \
-            --project=${{ secrets.GCP_PROJECT_ID }}
