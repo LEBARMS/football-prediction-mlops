@@ -8,6 +8,7 @@ on:
 env:
   IMAGE_NAME: football-api
   IMAGE_TAG: latest
+  TARGET_REF: Anthony
 
 jobs:
   retrain:
@@ -18,10 +19,11 @@ jobs:
       mae_away_new: ${{ steps.metrics.outputs.mae_away }}
 
     steps:
-      - name: Checkout
+      - name: Checkout code (Anthony branch for scheduled runs)
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          ref: ${{ env.TARGET_REF }}
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -301,3 +303,26 @@ jobs:
           tags: |
             ${{ secrets.DOCKERHUB_USERNAME }}/${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
             ${{ secrets.DOCKERHUB_USERNAME }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+  deploy:
+    needs: docker
+    if: needs.retrain.outputs.promote == 'true'
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_JSON }}   # create this secret (raw JSON)
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - name: Deploy to Cloud Run
+        run: |
+          gcloud run deploy football-api \
+            --image=docker.io/${{ secrets.DOCKERHUB_USERNAME }}/football-api:${{ github.sha }} \
+            --region=europe-west6 --platform=managed \
+            --allow-unauthenticated \
+            --port=8000 \
+            --set-env-vars=ENV=prod \
+            --max-instances=2 --cpu=1 --memory=512Mi
+
+      - name: Show service URL
+        run: gcloud run services describe football-api --region=europe-west6 --format='value(status.url)'

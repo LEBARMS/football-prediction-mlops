@@ -38,3 +38,9 @@ Thumbs.db
 
 dvc_storage/
 
+
+football-mlops-*.json
+
+# DVC model artifacts
+app/model/*.json
+app/model/*.joblib
