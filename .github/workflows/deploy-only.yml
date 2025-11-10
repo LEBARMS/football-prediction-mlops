@@ -60,6 +60,17 @@ jobs:
         with:
           project_id: ${{ secrets.GCP_PROJECT_ID }}
 
+      # 🔧 NEW: assert secret exists and force the active project
+      - name: Force active project
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -z "${{ secrets.GCP_PROJECT_ID }}" ]]; then
+            echo "::error::GCP_PROJECT_ID secret is empty or missing"; exit 1
+          fi
+          gcloud config set project "${{ secrets.GCP_PROJECT_ID }}"
+          echo "Effective project: $(gcloud info --format='value(config.project)')"
+
       - name: Build IMAGE_REF from digest
         id: image
         shell: bash
@@ -77,8 +88,8 @@ jobs:
           gcloud --version
           gcloud auth list
           gcloud config list
-          gcloud projects describe ${{ secrets.GCP_PROJECT_ID }} --format='value(projectNumber)'
-          gcloud services enable run.googleapis.com --project=${{ secrets.GCP_PROJECT_ID }}
+          echo "gcloud info project: $(gcloud info --format='value(config.project)')"
+          gcloud services enable run.googleapis.com --project='${{ secrets.GCP_PROJECT_ID }}'
           gcloud run services list --region='${{ inputs.region }}' --project='${{ secrets.GCP_PROJECT_ID }}' || true
 
       - name: Deploy to Cloud Run (by digest)
@@ -92,17 +103,16 @@ jobs:
             "--port=${{ inputs.port }}"
             "--project=${{ secrets.GCP_PROJECT_ID }}"
           )
-          # Allow unauthenticated if requested
+          # allow unauth
           if [[ "${{ inputs.allow_unauthenticated }}" == "true" ]]; then
             ARGS+=("--allow-unauthenticated")
           fi
-          # Env vars
+          # env vars
           if [[ -n "${{ inputs.env_vars }}" ]]; then
             ARGS+=("--set-env-vars=${{ inputs.env_vars }}")
           fi
-          # Extra flags (size, etc.)
+          # extra sizing flags
           if [[ -n "${{ inputs.deploy_flags }}" ]]; then
-            # shellsplit: expand flags into array
             read -r -a EXTRA <<< "${{ inputs.deploy_flags }}"
             ARGS+=("${EXTRA[@]}")
           fi
