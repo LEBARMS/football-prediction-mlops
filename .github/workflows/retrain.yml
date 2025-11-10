@@ -279,7 +279,9 @@ jobs:
       - name: DVC pull models for image
         env:
           GOOGLE_APPLICATION_CREDENTIALS: ${{ runner.temp }}/gcp-key.json
-        run: dvc pull -v
+        run: |
+          dvc pull -v || echo "No remote cache yet (first run / new hashes) — continuing to repro"
+          dvc status -c || true
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
