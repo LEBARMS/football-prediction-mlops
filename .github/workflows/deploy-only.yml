@@ -6,10 +6,9 @@ on:
       docker_repo:
         description: "Container repo (e.g., docker.io/<user>/football-api)"
         required: true
-        # 👇 Can't use secrets.* here, so use a static default.
         default: "docker.io/your-dockerhub-username/football-api"
       image_digest:
-        description: "Image digest WITHOUT the 'sha256:' prefix (or include it). Example: c33be0...58ddcb"
+        description: "Image digest (with or without 'sha256:')"
         required: true
       region:
         description: "Cloud Run region"
@@ -44,7 +43,7 @@ on:
         required: false
         default: "ENV=prod"
       runtime_service_account:
-        description: "Optional runtime SA email for the service (if omitted, default compute SA is used)"
+        description: "Optional runtime SA email"
         required: false
         default: ""
 
@@ -59,8 +58,14 @@ concurrency:
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    environment: production
     steps:
+      - name: Print selected ref and inputs
+        run: |
+          echo "REF=${GITHUB_REF}"
+          echo "SHA=${GITHUB_SHA}"
+          echo "docker_repo='${{ inputs.docker_repo }}'"
+          echo "image_digest='${{ inputs.image_digest }}'"
+
       - name: Auth to GCP
         uses: google-github-actions/auth@v2
         with:
@@ -77,10 +82,7 @@ jobs:
         run: |
           set -euo pipefail
           DIG="${{ inputs.image_digest }}"
-          # Normalize digest to ensure it has the sha256: prefix
-          if [[ "$DIG" != sha256:* ]]; then
-            DIG="sha256:${DIG}"
-          fi
+          [[ "$DIG" == sha256:* ]] || DIG="sha256:${DIG}"
           IMAGE_REF="${{ inputs.docker_repo }}@${DIG}"
           echo "IMAGE_REF=$IMAGE_REF" >> "$GITHUB_OUTPUT"
           echo "Using image: $IMAGE_REF"
@@ -88,6 +90,7 @@ jobs:
       - name: Verify account, project, and region access
         run: |
           set -euo pipefail
+          gcloud --version
           gcloud auth list
           gcloud config list
           gcloud projects describe ${{ secrets.GCP_PROJECT_ID }} --format='value(projectNumber)'
@@ -108,15 +111,12 @@ jobs:
             "--memory=${{ inputs.memory }}"
             "--project=${{ secrets.GCP_PROJECT_ID }}"
           )
-          # Allow unauthenticated if requested
           if [[ "${{ inputs.allow_unauthenticated }}" == "true" ]]; then
             ARGS+=("--allow-unauthenticated")
           fi
-          # Runtime Service Account (optional)
           if [[ -n "${{ inputs.runtime_service_account }}" ]]; then
             ARGS+=("--service-account=${{ inputs.runtime_service_account }}")
           fi
-          # Environment variables (optional)
           if [[ -n "${{ inputs.env_vars }}" ]]; then
             ARGS+=("--set-env-vars=${{ inputs.env_vars }}")
           fi
