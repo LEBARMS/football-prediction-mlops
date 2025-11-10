@@ -6,7 +6,7 @@ on:
   workflow_dispatch: {}
 
 env:
-  TARGET_REF: Anthony
+  TARGET_REF: main
 
 jobs:
   fetch:
