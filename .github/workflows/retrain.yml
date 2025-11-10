@@ -212,7 +212,6 @@ jobs:
 
   docker:
     needs: retrain
-    if: needs.retrain.outputs.promote == 'true'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
