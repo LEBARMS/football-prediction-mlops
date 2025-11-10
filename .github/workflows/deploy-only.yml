@@ -89,12 +89,23 @@ jobs:
           echo "IMAGE_REF=$IMAGE_REF" >> "$GITHUB_OUTPUT"
           echo "Using image: $IMAGE_REF"
 
-      - name: Enable API and list services
+      - name: Check Cloud Run API and list services
         shell: bash
         run: |
-          set -euo pipefail
-          gcloud services enable run.googleapis.com --project="$GCP_PROJECT_ID"
-          gcloud run services list --region='${{ inputs.region }}' --project="$GCP_PROJECT_ID" || true
+            set -euo pipefail
+            if gcloud services list --enabled --project="$GCP_PROJECT_ID" \
+                --filter='NAME:run.googleapis.com' --format='value(NAME)' \
+                | grep -q '^run.googleapis.com$'; then
+            echo "Cloud Run API already enabled."
+            else
+            echo "::error::Cloud Run API is NOT enabled for project $GCP_PROJECT_ID."
+            echo "::error::Enable it once with:"
+            echo "  gcloud services enable run.googleapis.com --project=$GCP_PROJECT_ID"
+            echo "  (requires roles/serviceusage.serviceUsageAdmin or Project Owner/Editor)"
+            exit 1
+            fi
+            gcloud run services list --region='${{ inputs.region }}' --project="$GCP_PROJECT_ID" || true
+
 
       - name: Deploy to Cloud Run (by digest)
         shell: bash
