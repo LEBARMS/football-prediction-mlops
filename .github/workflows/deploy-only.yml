@@ -24,7 +24,7 @@ on:
       env_vars:
         description: "KEY=VALUE pairs (comma-separated)"
         required: false
-        default: "ENV=prod"
+        default: "ENV=prod,MODEL_DIR=/app/model"
       deploy_flags:
         description: "Extra flags (e.g. --max-instances=2 --cpu=1 --memory=512Mi --service-account=...)"
         required: false
