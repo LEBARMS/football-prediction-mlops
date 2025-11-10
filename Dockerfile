@@ -17,6 +17,7 @@ RUN pip install --no-cache-dir -r requirements-api.txt
 
 # (3) Copy only what the API needs
 COPY app/ app/
+COPY app/model ./app/model
 
 EXPOSE 8000
 

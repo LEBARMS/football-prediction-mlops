@@ -1,72 +1,105 @@
 # app/main.py
 import os
-import json
-import pandas as pd
-import numpy as np
 import xgboost as xgb
+import pandas as pd
 from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+from typing import List, Literal
 
 app = FastAPI(title="Football Prediction API", docs_url="/", redoc_url="/redoc")
 
-# Paths – match how your DVC/steps currently write and read
-MODEL_DIR = "app/model"          # trained models live here
-HOME_MODEL = os.path.join(MODEL_DIR, "home_model.json")
-AWAY_MODEL = os.path.join(MODEL_DIR, "away_model.json")
+# ---- Model paths (match your current dvc.yaml)
+# You can override at runtime:  MODEL_DIR=/path/to/models
+MODEL_DIR = os.getenv("MODEL_DIR", "app/model")
+HOME_MODEL_PATH = os.path.join(MODEL_DIR, "home_model.json")
+AWAY_MODEL_PATH = os.path.join(MODEL_DIR, "away_model.json")
 
-def load_xgb(path: str) -> xgb.XGBRegressor:
-    if not os.path.exists(path) or os.path.getsize(path) == 0:
-        raise RuntimeError(f"Missing model file: {path}")
-    m = xgb.XGBRegressor()
-    m.load_model(path)
-    return m
+# ---- Exact feature schema used by train/predict
+REQUIRED_FEATURES = [
+    "home_matches_played", "home_goals_for", "home_goals_against", "home_goals_diff",
+    "away_matches_played", "away_goals_for", "away_goals_against", "away_goals_diff",
+]
 
-home_model = load_xgb(HOME_MODEL)
-away_model = load_xgb(AWAY_MODEL)
+# ---------- Pydantic payloads ----------
+class MatchFeatures(BaseModel):
+    home_matches_played: float = Field(..., ge=0)
+    home_goals_for: float = Field(..., ge=0)
+    home_goals_against: float = Field(..., ge=0)
+    home_goals_diff: float
+    away_matches_played: float = Field(..., ge=0)
+    away_goals_for: float = Field(..., ge=0)
+    away_goals_against: float = Field(..., ge=0)
+    away_goals_diff: float
 
-# Use booster feature names (the one-hot columns seen during training)
-FEATURES = home_model.get_booster().feature_names or []
+class PredictOneRequest(MatchFeatures):
+    pass
 
-class MatchData(BaseModel):
-    home_team: str
-    away_team: str
+class PredictBatchRequest(BaseModel):
+    items: List[MatchFeatures]
 
-def build_feature_row(home_team: str, away_team: str) -> pd.DataFrame:
-    """
-    Your model was trained on pd.get_dummies(['home_team','away_team']).
-    We recreate a single-row dummy vector by:
-      - creating a zero vector for all expected features
-      - setting 1 on 'home_team_<name>' and 'away_team_<name>' if those columns exist
-    """
-    if not FEATURES:
-        raise HTTPException(500, "Model feature names are empty. Re-train models.")
+class PredictOneResponse(BaseModel):
+    pred_home_goals: float
+    pred_away_goals: float
+    predicted_result: Literal["Home Win", "Away Win", "Draw"]
 
-    row = pd.Series(0.0, index=FEATURES, dtype=float)
+class PredictBatchResponse(BaseModel):
+    predictions: List[PredictOneResponse]
 
-    ht_col = f"home_team_{home_team}"
-    at_col = f"away_team_{away_team}"
+# ---------- Model loading ----------
+home_model = xgb.XGBRegressor()
+away_model = xgb.XGBRegressor()
 
-    if ht_col in row.index:
-        row[ht_col] = 1.0
-    # If team not seen at training, column won’t exist → stays all zeros (baseline)
-    if at_col in row.index:
-        row[at_col] = 1.0
+def _ensure_models():
+    for p in (HOME_MODEL_PATH, AWAY_MODEL_PATH):
+        if not (os.path.exists(p) and os.path.getsize(p) > 0):
+            raise FileNotFoundError(f"Missing model file: {p}")
 
-    return pd.DataFrame([row])
+@app.on_event("startup")
+def _load_models():
+    _ensure_models()
+    home_model.load_model(HOME_MODEL_PATH)
+    away_model.load_model(AWAY_MODEL_PATH)
 
 @app.get("/health", include_in_schema=False)
 def health():
-    return {"status": "ok"}
+    try:
+        _ensure_models()
+        return {"status": "ok"}
+    except Exception as e:
+        return {"status": "degraded", "detail": str(e)}
 
-@app.post("/predict")
-def predict(match: MatchData):
-    X = build_feature_row(match.home_team, match.away_team)
+# ---------- Core prediction ----------
+def _predict_core(df: pd.DataFrame) -> List[PredictOneResponse]:
+    missing = [c for c in REQUIRED_FEATURES if c not in df.columns]
+    if missing:
+        raise HTTPException(status_code=400, detail=f"Missing features: {missing}")
 
-    # Align columns to booster features (safety)
-    booster_features = home_model.get_booster().feature_names or list(X.columns)
-    X = X.reindex(columns=booster_features, fill_value=0)
+    X = df[REQUIRED_FEATURES]
+    pred_h = home_model.predict(X)
+    pred_a = away_model.predict(X)
 
-    h = float(home_model.predict(X)[0])
-    a = float(away_model.predict(X)[0])
+    def outcome(h, a):
+        if h > a: return "Home Win"
+        if h < a: return "Away Win"
+        return "Draw"
 
-    return {"pred_home_goals": round(h, 3), "pred_away_goals": round(a, 3)}
+    return [
+        PredictOneResponse(
+            pred_home_goals=float(h),
+            pred_away_goals=float(a),
+            predicted_result=outcome(h, a),
+        )
+        for h, a in zip(pred_h, pred_a)
+    ]
+
+# ---------- Endpoints ----------
+@app.post("/predict_one", response_model=PredictOneResponse)
+def predict_one(payload: PredictOneRequest):
+    df = pd.DataFrame([payload.dict()])
+    return _predict_core(df)[0]
+
+@app.post("/predict", response_model=PredictBatchResponse)
+def predict_batch(payload: PredictBatchRequest):
+    df = pd.DataFrame([item.dict() for item in payload.items])
+    preds = _predict_core(df)
+    return PredictBatchResponse(predictions=preds)

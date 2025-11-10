@@ -331,6 +331,7 @@ jobs:
             --allow-unauthenticated \
             --port=8000 \
             --set-env-vars=ENV=prod \
+            --set-env-vars=ENV=prod,MODEL_DIR=/app/model \
             --max-instances=2 --cpu=1 --memory=512Mi \
             --project=${{ secrets.GCP_PROJECT_ID }}
 

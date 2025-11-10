@@ -2,30 +2,46 @@
 
 ##  Objectif du projet
 
-Ce projet vise à construire un pipeline **MLOps complet** pour prédire le résultat d’un match de football (victoire, nul, défaite) à partir de données collectées automatiquement depuis **SoccerData** (FBref, Understat, etc.).
+Ce projet met en œuvre un pipeline MLOps complet pour la prédiction des scores de matchs de football
+à partir de données collectées automatiquement sur Football-Data.co.uk
+
+L’objectif est d’illustrer une approche reproductible et automatisée intégrant :
+```
+
+-la collecte et le prétraitement des données,
+
+-l’entraînement et le suivi des modèles,
+
+-la génération des prédictions,
+
+-la surveillance du Data Drift avec journalisation dans MLflow.
 .
 
-
+```
 ##  Architecture du projet
 ```
 football-prediction-mlops/
 │
 ├── data/
-│ ├── raw/ # Données brutes collectées (non suivies par Git)
-│ ├── processed/ # Données nettoyées
-│ └── predictions/ # Résultats et prédictions
+│   ├── raw/              # Données brutes collectées depuis Football-Data
+│   ├── processed/        # Données nettoyées et enrichies
+│   └── predictions/      # Prédictions finales du modèle
 │
 ├── src/
-│ ├── fetch_data.py # Collecte automatique des données via SoccerData
-│ ├── preprocess.py # Prétraitement et nettoyage des données
-│ ├── train.py # Entraînement du modèle + suivi MLflow
-│ └── predict.py # Génération des prédictions finales
+│   ├── fetch_data_universal.py   # Collecte multi-ligues et multi-saisons (Football-Data)
+│   ├── preprocess.py             # Nettoyage et fusion des données
+│   ├── train.py                  # Entraînement du modèle XGBoost + MLflow
+│   ├── predict.py                # Génération et évaluation des prédictions
+│   └── monitor_drift.py          # Détection automatique du Data Drift
 │
-├── models/ # Modèles sauvegardés (non suivis par Git)
-├── dvc.yaml # Pipeline DVC
-├── dvc.lock # Suivi des versions des étapes DVC
-├── requirements.txt # Dépendances du projet
-└── .gitignore
+├── models/                       # Modèles XGBoost sauvegardés
+│
+├── reports/                      # Rapports de drift CSV + HTML
+│
+├── dvc.yaml                       # Définition du pipeline DVC
+├── dvc.lock                       # Suivi des dépendances et outputs DVC
+├── requirements.txt               # Dépendances du projet
+└── .gitignore                     # Fichiers à exclure du suivi Git
 ```
 ---
 
@@ -55,37 +71,34 @@ source .venv/bin/activate    # (Linux / Mac)
  dvc repro
 
  Cette commande exécute automatiquement toutes les étapes :
- fetch_data → preprocess → train → predict 
+ fetch_data_universal → preprocess → train → predict → monitor_drift
 
 ```
 ### 5 Visualiser les résultats
 ```
- Les prédictions finales se trouvent dans : data/predictions/predicted_matches.csv
- Les métriques et modèles sont suivis via MLflow : mlflow ui
- Ouvrir http://localhost:5000 
+ # Sorties principales du pipeline :
+- Données nettoyées : data/processed/clean_matches.csv
+- Prédictions finales : data/predictions/predicted_matches.csv
+- Rapports de Data Drift :
+    • CSV  → reports/simple_data_drift_report.csv
+    • HTML → reports/simple_data_drift_report.html
+- Modèles entraînés : models/home_model.json et models/away_model.json
 
-```
-### 6 Lancer l'API REST
-```
-uvicorn app.main:app --reload
-Ouvrir :  http://127.0.0.1:8000
-Cliquer sur post/predict
-Cliquer sur try it out
-Changer le nom du Home Team et du Away Team
-Execute
-Résultat quelques cases vers le bas
-```
-### 7 Docker build & run
-```
-docker build -t football-api:0.1.0 .
-docker run --rm -p 8000:8000 football-api:0.1.0
+#  Suivi des expériences et métriques :
+mlflow ui
+# Puis ouvrir dans le navigateur :
+http://localhost:5000 
+
 ```
 
 ## Étapes actuelles implémentées
 ```
-- Collecte automatique des données (SoccerData)
-- Prétraitement et fusion des fichiers CSV
-- Entraînement du modèle XGBoost avec MLflow
-- Génération et évaluation des prédictions
-- Suivi complet du pipeline avec DVC
+- Collecte automatique des données multi-ligues et multi-saisons depuis Football-Data.co.uk
+- Prétraitement, nettoyage et fusion des matchs avec les statistiques d’équipes
+- Entraînement des modèles XGBoost pour la prédiction des buts à domicile et à l’extérieur
+- Suivi des expériences et métriques avec MLflow
+- Génération et évaluation des prédictions finales
+- Détection et rapport du Data Drift
+- Gestion et orchestration complète du pipeline avec DVC
+
 ```
