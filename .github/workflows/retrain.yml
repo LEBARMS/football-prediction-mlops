@@ -315,6 +315,14 @@ jobs:
         with:
           project_id: ${{ secrets.GCP_PROJECT_ID }}
 
+      - name: Verify account, project, and region access
+        run: |
+          gcloud auth list
+          gcloud config list
+          gcloud projects describe ${{ secrets.GCP_PROJECT_ID }} --format='value(projectNumber)'
+          gcloud services enable run.googleapis.com --project=${{ secrets.GCP_PROJECT_ID }}
+          gcloud run services list --region=europe-west6 --project=${{ secrets.GCP_PROJECT_ID }} || true
+
       - name: Deploy to Cloud Run
         run: |
           gcloud run deploy football-api \
@@ -323,7 +331,12 @@ jobs:
             --allow-unauthenticated \
             --port=8000 \
             --set-env-vars=ENV=prod \
-            --max-instances=2 --cpu=1 --memory=512Mi
+            --max-instances=2 --cpu=1 --memory=512Mi \
+            --project=${{ secrets.GCP_PROJECT_ID }}
 
       - name: Show service URL
-        run: gcloud run services describe football-api --region=europe-west6 --format='value(status.url)'
+        run: |
+          gcloud run services describe football-api \
+            --region=europe-west6 \
+            --format='value(status.url)' \
+            --project=${{ secrets.GCP_PROJECT_ID }}
