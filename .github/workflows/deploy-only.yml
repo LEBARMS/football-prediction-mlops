@@ -1,15 +1,59 @@
-name: deploy-only
+name: deploy-only-to-cloud-run
 
 on:
   workflow_dispatch:
     inputs:
-      image_ref:
-        description: "Docker image ref (e.g. anthonyat2002/football-api:latest or anthonyat2002/football-api@sha256:...)"
+      docker_repo:
+        description: "Container repo (e.g., docker.io/<user>/football-api)"
         required: true
-        default: anthonyat2002/football-api:latest
+        default: "docker.io/${{ secrets.DOCKERHUB_USERNAME }}/football-api"
+      image_digest:
+        description: "Image digest WITHOUT the 'sha256:' prefix? Either is fine. Example: c33be0...58ddcb"
+        required: true
       region:
+        description: "Cloud Run region"
         required: true
-        default: europe-west6
+        default: "europe-west6"
+      service:
+        description: "Cloud Run service name"
+        required: true
+        default: "football-api"
+      allow_unauthenticated:
+        description: "Allow unauthenticated invocations"
+        required: true
+        default: "true"
+      port:
+        description: "Container port"
+        required: true
+        default: "8000"
+      max_instances:
+        description: "Max instances"
+        required: true
+        default: "2"
+      cpu:
+        description: "vCPU"
+        required: true
+        default: "1"
+      memory:
+        description: "Memory"
+        required: true
+        default: "512Mi"
+      env_vars:
+        description: "Comma-separated KEY=VALUE pairs for --set-env-vars (leave empty for none)"
+        required: false
+        default: "ENV=prod"
+      runtime_service_account:
+        description: "Optional runtime SA email for the service (if omitted, default compute SA is used)"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: deploy-only-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   deploy:
@@ -19,17 +63,73 @@ jobs:
       - name: Auth to GCP
         uses: google-github-actions/auth@v2
         with:
+          # JSON key for the *deployer* service account
           credentials_json: ${{ secrets.GCP_SA_KEY }}
+
       - name: Setup gcloud
         uses: google-github-actions/setup-gcloud@v2
         with:
           project_id: ${{ secrets.GCP_PROJECT_ID }}
-      - name: Deploy to Cloud Run
+
+      - name: Build IMAGE_REF from digest
+        id: image
+        shell: bash
         run: |
-          gcloud run deploy football-api \
-            --image=docker.io/${{ github.event.inputs.image_ref }} \
-            --region=${{ github.event.inputs.region }} --platform=managed \
-            --allow-unauthenticated --port=8000 \
-            --set-env-vars=ENV=prod --max-instances=2 --cpu=1 --memory=512Mi
+          set -euo pipefail
+          DIG="${{ inputs.image_digest }}"
+          # Normalize digest to ensure it has the sha256: prefix
+          if [[ "$DIG" != sha256:* ]]; then
+            DIG="sha256:${DIG}"
+          fi
+          IMAGE_REF="${{ inputs.docker_repo }}@${DIG}"
+          echo "IMAGE_REF=$IMAGE_REF" >> "$GITHUB_OUTPUT"
+          echo "Using image: $IMAGE_REF"
+
+      - name: Verify account, project, and region access
+        run: |
+          set -euo pipefail
+          gcloud auth list
+          gcloud config list
+          gcloud projects describe ${{ secrets.GCP_PROJECT_ID }} --format='value(projectNumber)'
+          gcloud services enable run.googleapis.com --project=${{ secrets.GCP_PROJECT_ID }}
+          gcloud run services list --region='${{ inputs.region }}' --project='${{ secrets.GCP_PROJECT_ID }}' || true
+
+      - name: Deploy to Cloud Run (by digest)
+        shell: bash
+        run: |
+          set -euo pipefail
+          ARGS=(
+            "--image=${{ steps.image.outputs.IMAGE_REF }}"
+            "--region=${{ inputs.region }}"
+            "--platform=managed"
+            "--port=${{ inputs.port }}"
+            "--max-instances=${{ inputs.max_instances }}"
+            "--cpu=${{ inputs.cpu }}"
+            "--memory=${{ inputs.memory }}"
+            "--project=${{ secrets.GCP_PROJECT_ID }}"
+          )
+
+          # Allow unauthenticated if requested
+          if [[ "${{ inputs.allow_unauthenticated }}" == "true" ]]; then
+            ARGS+=("--allow-unauthenticated")
+          fi
+
+          # Runtime Service Account (optional)
+          if [[ -n "${{ inputs.runtime_service_account }}" ]]; then
+            ARGS+=("--service-account=${{ inputs.runtime_service_account }}")
+          fi
+
+          # Environment variables (optional)
+          if [[ -n "${{ inputs.env_vars }}" ]]; then
+            ARGS+=("--set-env-vars=${{ inputs.env_vars }}")
+          fi
+
+          echo "gcloud run deploy '${{ inputs.service }}' ${ARGS[*]}"
+          gcloud run deploy "${{ inputs.service }}" "${ARGS[@]}"
+
       - name: Show service URL
-        run: gcloud run services describe football-api --region=${{ github.event.inputs.region }} --format='value(status.url)'
+        run: |
+          gcloud run services describe '${{ inputs.service }}' \
+            --region='${{ inputs.region }}' \
+            --format='value(status.url)' \
+            --project='${{ secrets.GCP_PROJECT_ID }}'
