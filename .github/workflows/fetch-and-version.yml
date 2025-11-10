@@ -23,13 +23,14 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Install deps
+      - name: Install deps (DVC + scraper libs)
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
-          pip install dvc dvc-gs pandas requests
+          pip install -r requirements.txt || true
+          pip install "dvc>=3.50.0" "dvc-gs>=3.0.1"
+          pip install pandas requests
 
-      - name: Auth to GCS for DVC
+      - name: Auth to GCS for DVC (base64 SA key)
         run: |
           echo "${{ secrets.GCP_SA_KEY_B64 }}" | base64 -d > "$RUNNER_TEMP/gcp-key.json"
           echo "GOOGLE_APPLICATION_CREDENTIALS=$RUNNER_TEMP/gcp-key.json" >> "$GITHUB_ENV"
@@ -37,31 +38,45 @@ jobs:
       - name: Detect DVC remote name
         id: dvcremote
         run: |
+          set -e
           name="$(dvc config core.remote || true)"
-          if [ -z "$name" ]; then name="$(dvc remote list | awk '/^.+[[:space:]]+gs:\/\//{print $1; exit}')"; fi
+          if [ -z "$name" ]; then
+            name="$(dvc remote list | awk '/^.+[[:space:]]+gs:\/\//{print $1; exit}')"
+          fi
+          if [ -z "$name" ]; then
+            echo "No DVC remote found." >&2
+            exit 1
+          fi
+          echo "Using DVC remote: $name"
           echo "remote_name=$name" >> "$GITHUB_OUTPUT"
 
       - name: Point DVC remote to the key (local-only)
-        run: dvc remote modify --local "${{ steps.dvcremote.outputs.remote_name }}" credentialpath "$RUNNER_TEMP/gcp-key.json"
-
-      - name: Restore current versioned data
-        run: dvc pull -v
-
-      - name: Run the scraper (standalone, not via DVC)
         run: |
-          python src/fetch_data.py        # writes data/raw/raw_matches.csv (or similar)
-          test -s data/raw/raw_matches.csv
+          dvc remote modify --local "${{ steps.dvcremote.outputs.remote_name }}" credentialpath "$RUNNER_TEMP/gcp-key.json"
+          cat .dvc/config || true
+          cat .dvc/config.local || true
 
-      - name: Version new raw data with DVC
+      - name: Restore current versioned data (non-fatal first run)
         run: |
-          dvc add data/raw/raw_matches.csv
-          dvc status -c
+          dvc pull -v || echo "No remote cache yet — continuing"
+
+      - name: Run the scraper (NEW script + outputs)
+        run: |
+          python src/fetch_data_universal.py
+          test -s data/raw/schedule_multi_leagues.csv
+          test -s data/raw/team_stats_multi_leagues.csv
+
+      - name: Version new raw data with DVC (both files)
+        run: |
+          dvc add data/raw/schedule_multi_leagues.csv
+          dvc add data/raw/team_stats_multi_leagues.csv
+          dvc status -c || true
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add data/raw/raw_matches.csv.dvc dvc.lock
-          git commit -m "data: update raw matches [skip ci]" || echo "Nothing to commit."
+          git add data/raw/schedule_multi_leagues.csv.dvc data/raw/team_stats_multi_leagues.csv.dvc dvc.lock
+          git commit -m "data: update multi-league raw files [skip ci]" || echo "Nothing to commit."
 
-      - name: Push data to remote + repo
+      - name: Push data to DVC remote + push commit
         run: |
           dvc push -v
           git push || true
