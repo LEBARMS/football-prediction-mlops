@@ -1,0 +1,67 @@
+name: fetch-and-version
+
+on:
+  schedule:
+    - cron: "0 3 * * 1"   # Mondays 03:00 UTC
+  workflow_dispatch: {}
+
+env:
+  TARGET_REF: Anthony
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (Anthony)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ env.TARGET_REF }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install dvc dvc-gs pandas requests
+
+      - name: Auth to GCS for DVC
+        run: |
+          echo "${{ secrets.GCP_SA_KEY_B64 }}" | base64 -d > "$RUNNER_TEMP/gcp-key.json"
+          echo "GOOGLE_APPLICATION_CREDENTIALS=$RUNNER_TEMP/gcp-key.json" >> "$GITHUB_ENV"
+
+      - name: Detect DVC remote name
+        id: dvcremote
+        run: |
+          name="$(dvc config core.remote || true)"
+          if [ -z "$name" ]; then name="$(dvc remote list | awk '/^.+[[:space:]]+gs:\/\//{print $1; exit}')"; fi
+          echo "remote_name=$name" >> "$GITHUB_OUTPUT"
+
+      - name: Point DVC remote to the key (local-only)
+        run: dvc remote modify --local "${{ steps.dvcremote.outputs.remote_name }}" credentialpath "$RUNNER_TEMP/gcp-key.json"
+
+      - name: Restore current versioned data
+        run: dvc pull -v
+
+      - name: Run the scraper (standalone, not via DVC)
+        run: |
+          python src/fetch_data.py        # writes data/raw/raw_matches.csv (or similar)
+          test -s data/raw/raw_matches.csv
+
+      - name: Version new raw data with DVC
+        run: |
+          dvc add data/raw/raw_matches.csv
+          dvc status -c
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add data/raw/raw_matches.csv.dvc dvc.lock
+          git commit -m "data: update raw matches [skip ci]" || echo "Nothing to commit."
+
+      - name: Push data to remote + repo
+        run: |
+          dvc push -v
+          git push || true
