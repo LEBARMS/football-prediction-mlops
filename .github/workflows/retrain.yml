@@ -97,6 +97,26 @@ jobs:
         run: |
           dvc pull -v
           dvc status -c || true
+      - name: Unfreeze fetch_data (if previously frozen)
+        run: dvc unfreeze fetch_data || true
+
+      - name: Reproduce only fetch_data
+        run: |
+          dvc repro -s fetch_data -v
+          test -s data/raw/schedule_multi_leagues.csv
+          test -s data/raw/team_stats_multi_leagues.csv
+
+      - name: Commit updated lockfile for fetch_data
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add dvc.lock
+          git commit -m "data: refresh fetch_data stage [skip ci]" || echo "Nothing to commit."
+
+      - name: Push refreshed raw artifacts to DVC remote
+        env:
+          GOOGLE_APPLICATION_CREDENTIALS: ${{ runner.temp }}/gcp-key.json
+        run: dvc push -v
 
       - name: Run full pipeline (fetch is frozen in dvc.yaml)
         env:
